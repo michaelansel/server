@@ -185,6 +185,13 @@ class SonosPlayer(Player):
                 self.airplay_player_id,
             )
         )
+        # register callback for queue updates to sync repeat modes
+        self._on_unload_callbacks.append(
+            self.mass.subscribe(
+                self._on_queue_updated,
+                EventType.QUEUE_UPDATED,
+            )
+        )
 
     async def get_config_entries(
         self,
@@ -393,6 +400,8 @@ class SonosPlayer(Player):
                 cloud_queue_url,
                 item_id=media.queue_item_id,
             )
+            # Sync repeat modes from MA queue to Sonos
+            await self.sync_play_modes(media.source_id)
             return
 
         # play duration-less (long running) radio streams
@@ -453,6 +462,8 @@ class SonosPlayer(Player):
             await self._set_sonos_queue_from_mass_queue(media.source_id)
         if session_id := self.client.player.group.active_session_id:
             await self.client.api.playback_session.refresh_cloud_queue(session_id)
+            # Sync repeat modes when refreshing the queue
+            await self.sync_play_modes(media.source_id)
 
     async def set_members(
         self,
@@ -777,6 +788,14 @@ class SonosPlayer(Player):
             return
         self.update_attributes()
         self.update_state()
+
+    def _on_queue_updated(self, event: MassEvent) -> None:
+        """Handle incoming queue update event to sync repeat modes."""
+        # Only sync if this player is playing from the updated queue
+        if self._attr_active_source != event.object_id:
+            return
+        # Sync play modes in a task to avoid blocking the event handler
+        self.mass.create_task(self.sync_play_modes(event.object_id))
 
     async def sync_play_modes(self, queue_id: str) -> None:
         """Sync the play modes between MA and Sonos."""
