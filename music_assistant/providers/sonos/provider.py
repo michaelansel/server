@@ -280,7 +280,15 @@ class SonosPlayerProvider(PlayerProvider):
                 sonos_player.current_media
                 and sonos_player.current_media.queue_item_id == item["id"]
             ):
-                sonos_player.update_elapsed_time(item["positionMillis"] / 1000)
+                position_seconds = item["positionMillis"] / 1000
+                # Normalize position when track is repeating
+                # Sonos reports cumulative position that keeps increasing beyond track duration
+                if (
+                    sonos_player.current_media.duration
+                    and position_seconds > sonos_player.current_media.duration
+                ):
+                    position_seconds = position_seconds % sonos_player.current_media.duration
+                sonos_player.update_elapsed_time(position_seconds)
             break
         return web.Response(status=204)
 

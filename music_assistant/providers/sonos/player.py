@@ -669,9 +669,7 @@ class SonosPlayer(Player):
         ):
             self._attr_playback_state = PlaybackState.IDLE
 
-        # parse current media
-        self._attr_elapsed_time = self.client.player.group.position
-        self._attr_elapsed_time_last_updated = time.time()
+        # parse current media first so we can use duration for position normalization
         current_media = None
         if (current_item := active_group.playback_metadata.get("currentItem")) and (
             (track := current_item.get("track")) and track.get("name")
@@ -717,6 +715,15 @@ class SonosPlayer(Player):
                 current_media.uri = container["id"]["objectId"]
 
         self._attr_current_media = current_media
+
+        # Update elapsed time (normalize if repeating track)
+        elapsed_time = self.client.player.group.position
+        # Normalize position when track is repeating
+        # Sonos reports cumulative position that keeps increasing beyond track duration
+        if current_media and current_media.duration and elapsed_time > current_media.duration:
+            elapsed_time = elapsed_time % current_media.duration
+        self._attr_elapsed_time = elapsed_time
+        self._attr_elapsed_time_last_updated = time.time()
 
     def update_elapsed_time(self, elapsed_time: float | None = None) -> None:
         """Update the elapsed time of the current media."""
