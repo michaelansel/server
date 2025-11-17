@@ -219,7 +219,10 @@ class DLNAPlayer(Player):
         _device_uri = self.device.current_track_uri or ""
         self.set_current_media(uri=_device_uri, clear_all=True)
 
-        if "spotify" in _device_uri:
+        # Use stored source_id from play_media if available, otherwise guess from URI
+        if mass_source_id := self.extra_data.get("mass_source_id"):
+            self._attr_active_source = mass_source_id
+        elif "spotify" in _device_uri:
             self._attr_active_source = "spotify"
         elif _device_uri.startswith("http"):
             self._attr_active_source = "http"
@@ -283,6 +286,8 @@ class DLNAPlayer(Player):
     async def stop(self) -> None:
         """Send STOP command to given player."""
         assert self.device is not None  # for type checking
+        # Clear stored source_id when stopping
+        self.extra_data.pop("mass_source_id", None)
         await self.device.async_stop()
 
     @catch_request_errors
@@ -298,6 +303,9 @@ class DLNAPlayer(Player):
         # always clear queue (by sending stop) first
         if self.device.can_stop:
             await self.stop()
+        # Store the source_id so we can restore it during polling
+        if media.source_id:
+            self.extra_data["mass_source_id"] = media.source_id
         didl_metadata = create_didl_metadata(media)
         title = media.title or media.uri
         await self.device.async_set_transport_uri(media.uri, title, didl_metadata)
