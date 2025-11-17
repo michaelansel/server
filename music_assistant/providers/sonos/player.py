@@ -110,7 +110,21 @@ class SonosPlayer(Player):
         # This handles the case where extrapolation continues past track end during repeat
         if self.current_media and self.current_media.duration:
             if calculated_time > self.current_media.duration:
+                self.logger.debug(
+                    "Normalizing elapsed time: %.2fs > %.2fs (duration), wrapping to %.2fs",
+                    calculated_time,
+                    self.current_media.duration,
+                    calculated_time % self.current_media.duration,
+                )
                 calculated_time = calculated_time % self.current_media.duration
+        else:
+            if calculated_time > 20:  # Log when position seems wrong but we can't normalize
+                self.logger.warning(
+                    "Cannot normalize position %.2fs - current_media=%s, duration=%s",
+                    calculated_time,
+                    self.current_media,
+                    self.current_media.duration if self.current_media else None,
+                )
 
         return calculated_time
 
@@ -738,6 +752,12 @@ class SonosPlayer(Player):
         position = self.client.player.group.position
         # When repeat mode is active, Sonos may report cumulative position beyond duration
         if current_media and current_media.duration and position > current_media.duration:
+            self.logger.debug(
+                "update_attributes: Normalizing position %.2fs > %.2fs, wrapping to %.2fs",
+                position,
+                current_media.duration,
+                position % current_media.duration,
+            )
             position = position % current_media.duration
         self._attr_elapsed_time = position
         self._attr_elapsed_time_last_updated = time.time()
@@ -751,6 +771,12 @@ class SonosPlayer(Player):
                 and self.current_media.duration
                 and elapsed_time > self.current_media.duration
             ):
+                self.logger.debug(
+                    "update_elapsed_time: Normalizing %.2fs > %.2fs, wrapping to %.2fs",
+                    elapsed_time,
+                    self.current_media.duration,
+                    elapsed_time % self.current_media.duration,
+                )
                 elapsed_time = elapsed_time % self.current_media.duration
             self._attr_elapsed_time = elapsed_time
         last_updated = time.time()
