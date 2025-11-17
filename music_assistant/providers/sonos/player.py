@@ -101,13 +101,18 @@ class SonosPlayer(Player):
         """Return the corrected/realtime elapsed time, normalized for repeat mode."""
         if self.elapsed_time is None or self.elapsed_time_last_updated is None:
             return None
+
+        calculated_time = self.elapsed_time
         if self.playback_state == PlaybackState.PLAYING:
             calculated_time = self.elapsed_time + (time.time() - self.elapsed_time_last_updated)
-            # Normalize for repeating tracks - if position exceeds duration, wrap it
-            if self.current_media and self.current_media.duration and calculated_time > self.current_media.duration:
-                return calculated_time % self.current_media.duration
-            return calculated_time
-        return self.elapsed_time
+
+        # Normalize for repeating tracks - if position exceeds duration, wrap it
+        # This handles the case where extrapolation continues past track end during repeat
+        if self.current_media and self.current_media.duration:
+            if calculated_time > self.current_media.duration:
+                calculated_time = calculated_time % self.current_media.duration
+
+        return calculated_time
 
     @property
     def airplay_mode_enabled(self) -> bool:
@@ -729,13 +734,24 @@ class SonosPlayer(Player):
 
         self._attr_current_media = current_media
 
-        # Update elapsed time
-        self._attr_elapsed_time = self.client.player.group.position
+        # Update elapsed time and normalize if track is repeating
+        position = self.client.player.group.position
+        # When repeat mode is active, Sonos may report cumulative position beyond duration
+        if current_media and current_media.duration and position > current_media.duration:
+            position = position % current_media.duration
+        self._attr_elapsed_time = position
         self._attr_elapsed_time_last_updated = time.time()
 
     def update_elapsed_time(self, elapsed_time: float | None = None) -> None:
         """Update the elapsed time of the current media."""
         if elapsed_time is not None:
+            # Normalize if position exceeds track duration (can happen with repeat mode)
+            if (
+                self.current_media
+                and self.current_media.duration
+                and elapsed_time > self.current_media.duration
+            ):
+                elapsed_time = elapsed_time % self.current_media.duration
             self._attr_elapsed_time = elapsed_time
         last_updated = time.time()
         self._attr_elapsed_time_last_updated = last_updated
