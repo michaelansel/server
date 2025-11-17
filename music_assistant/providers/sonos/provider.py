@@ -174,12 +174,50 @@ class SonosPlayerProvider(PlayerProvider):
         queue_version = request.query.get(
             "queueVersion", str(int(sonos_player.sonos_queue.last_updated))
         )
-        # because Sonos does not show our queue in the app anyways,
-        # we just return the previous, current and next item in the queue
-        items = list(sonos_player.sonos_queue.items)
+
+        # Dynamically build items list based on repeat mode
+        # Since canRepeat is disabled, Sonos will request next items from us
+        # We need to serve repeated items when repeat mode is enabled
+        base_items = list(sonos_player.sonos_queue.items)
+        items = []
+
+        if base_items and (queue := sonos_player.mass.player_queues.get(sonos_player.active_source)):
+            from music_assistant_models.enums import RepeatMode
+
+            if queue.repeat_mode == RepeatMode.ONE:
+                # Repeat single track: serve the current track multiple times
+                # This makes Sonos keep playing it when it finishes
+                current_item = base_items[0] if base_items else None
+                if current_item:
+                    items = [current_item] * 20  # Provide 20 repetitions
+
+            elif queue.repeat_mode == RepeatMode.ALL:
+                # Repeat all: provide the full queue repeated multiple times
+                # Get all items from the MA queue, not just the rolling window
+                all_queue_items = sonos_player.mass.player_queues.items(
+                    queue_id=sonos_player.active_source,
+                    limit=500
+                )
+                all_items = []
+                for queue_item in all_queue_items:
+                    if not queue_item.available:
+                        continue
+                    media = await sonos_player.mass.player_queues.player_media_from_queue_item(
+                        queue_item, False
+                    )
+                    all_items.append(media)
+                # Repeat the full queue 5 times
+                if all_items:
+                    items = all_items * 5
+            else:
+                # No repeat: just serve the items we have
+                items = base_items
+        else:
+            items = base_items
+
         result = {
             "includesBeginningOfQueue": False,
-            "includesEndOfQueue": False,
+            "includesEndOfQueue": queue.repeat_mode == RepeatMode.OFF if queue else True,
             "contextVersion": context_version,
             "queueVersion": queue_version,
             "items": [self._parse_sonos_queue_item(x) for x in items],
@@ -249,8 +287,8 @@ class SonosPlayerProvider(PlayerProvider):
                 "canSkipBack": True,
                 # seek needs to be disabled because we dont properly support range requests
                 "canSeek": False,
-                "canRepeat": True,  # enabled, synced from MA queue controller
-                "canRepeatOne": True,  # enabled, synced from MA queue controller
+                "canRepeat": False,  # MA handles repeat by serving appropriate items
+                "canRepeatOne": False,  # MA handles repeat by serving appropriate items
                 "canCrossfade": False,  # handled by MA queue controller
                 "canShuffle": False,  # handled by MA queue controller
             },
@@ -281,19 +319,6 @@ class SonosPlayerProvider(PlayerProvider):
                 and sonos_player.current_media.queue_item_id == item["id"]
             ):
                 position_seconds = item["positionMillis"] / 1000
-                # Detect track restart: position went backwards or exceeded duration
-                if (
-                    sonos_player.elapsed_time is not None
-                    and sonos_player.current_media
-                    and sonos_player.current_media.duration
-                ):
-                    # Position went significantly backwards (> 2s) = track restarted
-                    if position_seconds < (sonos_player.elapsed_time - 2):
-                        # Track restarted from beginning, position_seconds is correct
-                        pass
-                    # Position exceeds duration = Sonos reporting cumulative, normalize it
-                    elif position_seconds > sonos_player.current_media.duration:
-                        position_seconds = position_seconds % sonos_player.current_media.duration
                 sonos_player.update_elapsed_time(position_seconds)
             break
         return web.Response(status=204)
