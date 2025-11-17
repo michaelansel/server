@@ -97,35 +97,6 @@ class SonosPlayer(Player):
         self.sonos_queue: SonosQueue = SonosQueue()
 
     @property
-    def elapsed_time(self) -> float | None:
-        """Return the elapsed time, normalized for repeat mode."""
-        if self._attr_elapsed_time is None:
-            return None
-        # Normalize the base elapsed time for repeating tracks
-        if self.current_media and self.current_media.duration:
-            if self._attr_elapsed_time > self.current_media.duration:
-                return self._attr_elapsed_time % self.current_media.duration
-        return self._attr_elapsed_time
-
-    @property
-    def corrected_elapsed_time(self) -> float | None:
-        """Return the corrected/realtime elapsed time, normalized for repeat mode."""
-        if self.elapsed_time is None or self.elapsed_time_last_updated is None:
-            return None
-
-        calculated_time = self.elapsed_time
-        if self.playback_state == PlaybackState.PLAYING:
-            calculated_time = self.elapsed_time + (time.time() - self.elapsed_time_last_updated)
-
-        # Normalize for repeating tracks - if position exceeds duration, wrap it
-        # This handles the case where extrapolation continues past track end during repeat
-        if self.current_media and self.current_media.duration:
-            if calculated_time > self.current_media.duration:
-                calculated_time = calculated_time % self.current_media.duration
-
-        return calculated_time
-
-    @property
     def airplay_mode_enabled(self) -> bool:
         """Return if airplay mode is enabled for the player."""
         return self.mass.config.get_raw_player_config_value(
@@ -212,13 +183,6 @@ class SonosPlayer(Player):
                 self._on_airplay_player_event,
                 (EventType.PLAYER_UPDATED, EventType.PLAYER_ADDED),
                 self.airplay_player_id,
-            )
-        )
-        # register callback for queue updates to sync repeat modes
-        self._on_unload_callbacks.append(
-            self.mass.subscribe(
-                self._on_queue_updated,
-                EventType.QUEUE_UPDATED,
             )
         )
 
@@ -429,8 +393,6 @@ class SonosPlayer(Player):
                 cloud_queue_url,
                 item_id=media.queue_item_id,
             )
-            # Sync repeat modes from MA queue to Sonos
-            await self.sync_play_modes(media.source_id)
             return
 
         # play duration-less (long running) radio streams
@@ -491,8 +453,6 @@ class SonosPlayer(Player):
             await self._set_sonos_queue_from_mass_queue(media.source_id)
         if session_id := self.client.player.group.active_session_id:
             await self.client.api.playback_session.refresh_cloud_queue(session_id)
-            # Sync repeat modes when refreshing the queue
-            await self.sync_play_modes(media.source_id)
 
     async def set_members(
         self,
@@ -745,24 +705,13 @@ class SonosPlayer(Player):
 
         self._attr_current_media = current_media
 
-        # Update elapsed time and normalize if track is repeating
-        position = self.client.player.group.position
-        # When repeat mode is active, Sonos may report cumulative position beyond duration
-        if current_media and current_media.duration and position > current_media.duration:
-            position = position % current_media.duration
-        self._attr_elapsed_time = position
+        # Update elapsed time
+        self._attr_elapsed_time = self.client.player.group.position
         self._attr_elapsed_time_last_updated = time.time()
 
     def update_elapsed_time(self, elapsed_time: float | None = None) -> None:
         """Update the elapsed time of the current media."""
         if elapsed_time is not None:
-            # Normalize if position exceeds track duration (can happen with repeat mode)
-            if (
-                self.current_media
-                and self.current_media.duration
-                and elapsed_time > self.current_media.duration
-            ):
-                elapsed_time = elapsed_time % self.current_media.duration
             self._attr_elapsed_time = elapsed_time
         last_updated = time.time()
         self._attr_elapsed_time_last_updated = last_updated
@@ -830,36 +779,6 @@ class SonosPlayer(Player):
             return
         self.update_attributes()
         self.update_state()
-
-    def _on_queue_updated(self, event: MassEvent) -> None:
-        """Handle incoming queue update event to sync repeat modes."""
-        # Only sync if this player is playing from the updated queue
-        if self._attr_active_source != event.object_id:
-            return
-        # Sync play modes in a task to avoid blocking the event handler
-        self.mass.create_task(self.sync_play_modes(event.object_id))
-
-    async def sync_play_modes(self, queue_id: str) -> None:
-        """Sync the play modes between MA and Sonos."""
-        queue = self.mass.player_queues.get(queue_id)
-        if not queue or queue.state not in (PlaybackState.PLAYING, PlaybackState.PAUSED):
-            return
-        repeat_single_enabled = queue.repeat_mode == RepeatMode.ONE
-        repeat_all_enabled = queue.repeat_mode == RepeatMode.ALL
-        play_modes = self.client.player.group.play_modes
-        if (
-            play_modes.repeat != repeat_all_enabled
-            or play_modes.repeat_one != repeat_single_enabled
-        ):
-            try:
-                await self.client.player.group.set_play_modes(
-                    repeat=repeat_all_enabled,
-                    repeat_one=repeat_single_enabled,
-                )
-            except FailedCommand as err:
-                if "groupCoordinatorChanged" not in str(err):
-                    # this may happen at race conditions
-                    raise
 
     async def _play_media_airplay(
         self,
