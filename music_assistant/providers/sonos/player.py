@@ -97,6 +97,19 @@ class SonosPlayer(Player):
         self.sonos_queue: SonosQueue = SonosQueue()
 
     @property
+    def corrected_elapsed_time(self) -> float | None:
+        """Return the corrected/realtime elapsed time, normalized for repeat mode."""
+        if self.elapsed_time is None or self.elapsed_time_last_updated is None:
+            return None
+        if self.playback_state == PlaybackState.PLAYING:
+            calculated_time = self.elapsed_time + (time.time() - self.elapsed_time_last_updated)
+            # Normalize for repeating tracks - if position exceeds duration, wrap it
+            if self.current_media and self.current_media.duration and calculated_time > self.current_media.duration:
+                return calculated_time % self.current_media.duration
+            return calculated_time
+        return self.elapsed_time
+
+    @property
     def airplay_mode_enabled(self) -> bool:
         """Return if airplay mode is enabled for the player."""
         return self.mass.config.get_raw_player_config_value(
@@ -716,13 +729,8 @@ class SonosPlayer(Player):
 
         self._attr_current_media = current_media
 
-        # Update elapsed time (normalize if repeating track)
-        elapsed_time = self.client.player.group.position
-        # Normalize position when track is repeating
-        # Sonos reports cumulative position that keeps increasing beyond track duration
-        if current_media and current_media.duration and elapsed_time > current_media.duration:
-            elapsed_time = elapsed_time % current_media.duration
-        self._attr_elapsed_time = elapsed_time
+        # Update elapsed time
+        self._attr_elapsed_time = self.client.player.group.position
         self._attr_elapsed_time_last_updated = time.time()
 
     def update_elapsed_time(self, elapsed_time: float | None = None) -> None:

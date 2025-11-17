@@ -281,13 +281,19 @@ class SonosPlayerProvider(PlayerProvider):
                 and sonos_player.current_media.queue_item_id == item["id"]
             ):
                 position_seconds = item["positionMillis"] / 1000
-                # Normalize position when track is repeating
-                # Sonos reports cumulative position that keeps increasing beyond track duration
-                if (
-                    sonos_player.current_media.duration
-                    and position_seconds > sonos_player.current_media.duration
-                ):
-                    position_seconds = position_seconds % sonos_player.current_media.duration
+                # Detect if track has repeated by checking if position went backwards
+                # or if position exceeds duration (Sonos may report cumulative position)
+                if sonos_player.current_media.duration:
+                    if position_seconds > sonos_player.current_media.duration:
+                        # Sonos is reporting cumulative position, normalize it
+                        position_seconds = position_seconds % sonos_player.current_media.duration
+                    elif (
+                        sonos_player.elapsed_time is not None
+                        and position_seconds < sonos_player.elapsed_time - 5  # 5 second tolerance for network delays
+                    ):
+                        # Position went backwards significantly, track has restarted
+                        # No normalization needed, position_seconds is already correct
+                        pass
                 sonos_player.update_elapsed_time(position_seconds)
             break
         return web.Response(status=204)
