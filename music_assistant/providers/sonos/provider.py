@@ -249,8 +249,8 @@ class SonosPlayerProvider(PlayerProvider):
                 "canSkipBack": True,
                 # seek needs to be disabled because we dont properly support range requests
                 "canSeek": False,
-                "canRepeat": False,  # handled by MA queue controller
-                "canRepeatOne": False,  # handled by MA queue controller
+                "canRepeat": True,  # enabled, synced from MA queue controller
+                "canRepeatOne": True,  # enabled, synced from MA queue controller
                 "canCrossfade": False,  # handled by MA queue controller
                 "canShuffle": False,  # handled by MA queue controller
             },
@@ -281,6 +281,19 @@ class SonosPlayerProvider(PlayerProvider):
                 and sonos_player.current_media.queue_item_id == item["id"]
             ):
                 position_seconds = item["positionMillis"] / 1000
+                # Detect track restart: position went backwards or exceeded duration
+                if (
+                    sonos_player.elapsed_time is not None
+                    and sonos_player.current_media
+                    and sonos_player.current_media.duration
+                ):
+                    # Position went significantly backwards (> 2s) = track restarted
+                    if position_seconds < (sonos_player.elapsed_time - 2):
+                        # Track restarted from beginning, position_seconds is correct
+                        pass
+                    # Position exceeds duration = Sonos reporting cumulative, normalize it
+                    elif position_seconds > sonos_player.current_media.duration:
+                        position_seconds = position_seconds % sonos_player.current_media.duration
                 sonos_player.update_elapsed_time(position_seconds)
             break
         return web.Response(status=204)
